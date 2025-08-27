@@ -4,14 +4,16 @@ use super::{
 };
 use crate::instruction::builder::{build_transaction, PriorityFee};
 use rand::seq::IndexedRandom;
-use solana_client::nonblocking::rpc_client::RpcClient;
+use solana_client::{nonblocking::rpc_client::RpcClient, rpc_config::RpcTransactionConfig};
 use solana_sdk::{
+    commitment_config::CommitmentConfig,
     pubkey::Pubkey,
     signature::{Keypair, Signature},
     signer::Signer,
     transaction::VersionedTransaction,
 };
-use spl_associated_token_account::get_associated_token_address;
+use solana_transaction_status::UiTransactionEncoding;
+use spl_associated_token_account::{get_associated_token_address, instruction::create_associated_token_account_idempotent};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -79,7 +81,7 @@ impl DefaultSWQoSClient {
     pub async fn transfer(&self, from: &Keypair, to: &Pubkey, amount: u64, fee: Option<PriorityFee>) -> anyhow::Result<Signature> {
         let blockhash = self.rpc_client.get_latest_blockhash().await?;
         let instruction = solana_sdk::system_instruction::transfer(&from.pubkey(), to, amount);
-        let transaction = build_transaction(from, vec![instruction], blockhash, fee, None)?;
+        let transaction = build_transaction(from, vec![instruction], blockhash, fee, None, None)?;
         let signature = transaction.signatures[0];
         self.send_transaction(transaction).await?;
         Ok(signature)
@@ -91,7 +93,7 @@ impl DefaultSWQoSClient {
             .iter()
             .map(|transfer| solana_sdk::system_instruction::transfer(&from.pubkey(), &transfer.to, transfer.amount))
             .collect::<Vec<_>>();
-        let transaction = build_transaction(from, instructions, blockhash, fee, None)?;
+        let transaction = build_transaction(from, instructions, blockhash, fee, None, None)?;
         let signature = transaction.signatures[0];
         self.send_transaction(transaction).await?;
         Ok(signature)
@@ -101,8 +103,9 @@ impl DefaultSWQoSClient {
         let blockhash = self.rpc_client.get_latest_blockhash().await?;
         let from_ata = get_associated_token_address(&from.pubkey(), mint);
         let to_ata = get_associated_token_address(to, mint);
+        let create_ata = create_associated_token_account_idempotent(&from.pubkey(), to, &mint, &spl_token::ID);
         let instruction = spl_token::instruction::transfer(&spl_token::ID, &from_ata, &to_ata, &from.pubkey(), &[], amount)?;
-        let transaction = build_transaction(from, vec![instruction], blockhash, fee, None)?;
+        let transaction = build_transaction(from, vec![create_ata, instruction], blockhash, fee, None, None)?;
         let signature = transaction.signatures[0];
         self.send_transaction(transaction).await?;
         Ok(signature)
@@ -111,14 +114,17 @@ impl DefaultSWQoSClient {
     pub async fn spl_batch_transfer(&self, from: &Keypair, to: Vec<TransferInfo>, mint: &Pubkey, fee: Option<PriorityFee>) -> anyhow::Result<Signature> {
         let blockhash = self.rpc_client.get_latest_blockhash().await?;
         let from_ata = get_associated_token_address(&from.pubkey(), mint);
-        let instructions = to
-            .iter()
-            .map(|transfer| {
-                let to_ata = get_associated_token_address(&transfer.to, mint);
-                spl_token::instruction::transfer(&spl_token::ID, &from_ata, &to_ata, &from.pubkey(), &[], transfer.amount)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let transaction = build_transaction(from, instructions, blockhash, fee, None)?;
+        let mut instructions = Vec::new();
+
+        for transfer in &to {
+            let to_ata = get_associated_token_address(&transfer.to, mint);
+            let create_ata = create_associated_token_account_idempotent(&from.pubkey(), &transfer.to, &mint, &spl_token::ID);
+            let instruction = spl_token::instruction::transfer(&spl_token::ID, &from_ata, &to_ata, &from.pubkey(), &[], transfer.amount)?;
+            instructions.push(create_ata);
+            instructions.push(instruction);
+        }
+
+        let transaction = build_transaction(from, instructions, blockhash, fee, None, None)?;
         let signature = transaction.signatures[0];
         self.send_transaction(transaction).await?;
         Ok(signature)
@@ -128,9 +134,21 @@ impl DefaultSWQoSClient {
         const MAX_WAIT_SECONDS: u64 = 10;
         let ts = std::time::SystemTime::now();
         loop {
-            let confirmed = self.rpc_client.confirm_transaction(&signature).await?;
-            if confirmed {
-                break;
+            if let Ok(tx) = self
+                .rpc_client
+                .get_transaction_with_config(
+                    &signature,
+                    RpcTransactionConfig {
+                        encoding: Some(UiTransactionEncoding::Json),
+                        commitment: Some(CommitmentConfig::confirmed()),
+                        max_supported_transaction_version: Some(0),
+                    },
+                )
+                .await
+            {
+                if tx.slot > 0 {
+                    break;
+                }
             }
             if ts.elapsed().unwrap().as_secs() > MAX_WAIT_SECONDS {
                 return Err(anyhow::anyhow!("Transaction confirmation timedout: {:?}", signature));
