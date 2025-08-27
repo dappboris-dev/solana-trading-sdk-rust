@@ -1,5 +1,8 @@
 use super::{dex_traits::DexTrait, pumpfun, pumpswap};
-use crate::common::trading_endpoint::TradingEndpoint;
+use crate::{
+    common::trading_endpoint::TradingEndpoint,
+    dex::{believe, boopfun, raydium_bonk, meteora_dbc},
+};
 use serde::{Deserialize, Serialize};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{pubkey::Pubkey, signature::Keypair};
@@ -10,6 +13,8 @@ pub struct PoolInfo {
     pub pool: Pubkey,
     pub creator: Option<Pubkey>,
     pub creator_vault: Option<Pubkey>,
+    pub config: Option<Pubkey>,
+    pub extra_address: Option<Pubkey>,
     pub token_reserves: u64,
     pub sol_reserves: u64,
 }
@@ -32,17 +37,32 @@ pub struct Create {
 pub enum DexType {
     Pumpfun,
     PumpSwap,
+    RayBonk,
+    Boopfun,
+    Believe,
+    MeteoraDBC,
 }
 
 impl DexType {
     pub fn all() -> Vec<DexType> {
-        vec![DexType::Pumpfun, DexType::PumpSwap]
+        vec![
+            DexType::Pumpfun,
+            DexType::PumpSwap,
+            DexType::RayBonk,
+            DexType::Boopfun,
+            DexType::Believe,
+            DexType::MeteoraDBC,
+        ]
     }
 
     pub fn instantiate(&self, endpoint: Arc<TradingEndpoint>) -> Arc<dyn DexTrait> {
         match self {
             DexType::Pumpfun => Arc::new(pumpfun::Pumpfun::new(endpoint)),
             DexType::PumpSwap => Arc::new(pumpswap::PumpSwap::new(endpoint)),
+            DexType::RayBonk => Arc::new(raydium_bonk::RaydiumBonk::new(endpoint)),
+            DexType::Boopfun => Arc::new(boopfun::Boopfun::new(endpoint)),
+            DexType::Believe => Arc::new(believe::Believe::new(endpoint)),
+            DexType::MeteoraDBC => Arc::new(meteora_dbc::MeteoraDBC::new(endpoint)),
         }
     }
 }
