@@ -1,3 +1,5 @@
+use crate::common::accounts::PUBKEY_WSOL;
+use serde::{Deserialize, Serialize};
 use solana_sdk::{
     compute_budget::ComputeBudgetInstruction,
     hash::Hash,
@@ -15,9 +17,7 @@ use spl_associated_token_account::{
 };
 use spl_token::instruction::{close_account, sync_native};
 
-use crate::common::accounts::PUBKEY_WSOL;
-
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PriorityFee {
     pub unit_limit: u32,
     pub unit_price: u64,
@@ -55,7 +55,7 @@ pub fn build_transaction(
     Ok(transaction)
 }
 
-pub fn build_buy_instructions(payer: &Keypair, mint: &Pubkey, buy_instruction: Instruction) -> anyhow::Result<Vec<Instruction>> {
+pub fn build_sol_buy_instructions(payer: &Keypair, mint: &Pubkey, buy_instruction: Instruction) -> anyhow::Result<Vec<Instruction>> {
     let mut instructions = vec![];
 
     instructions.push(create_associated_token_account(&payer.pubkey(), &payer.pubkey(), &mint, &spl_token::ID));
@@ -64,7 +64,7 @@ pub fn build_buy_instructions(payer: &Keypair, mint: &Pubkey, buy_instruction: I
     Ok(instructions)
 }
 
-pub fn build_sell_instructions(payer: &Keypair, mint: &Pubkey, sell_instruction: Instruction, close_mint_ata: bool) -> Result<Vec<Instruction>, anyhow::Error> {
+pub fn build_sol_sell_instructions(payer: &Keypair, mint: &Pubkey, sell_instruction: Instruction, close_mint_ata: bool) -> Result<Vec<Instruction>, anyhow::Error> {
     let mut instructions = vec![sell_instruction];
 
     if close_mint_ata {
