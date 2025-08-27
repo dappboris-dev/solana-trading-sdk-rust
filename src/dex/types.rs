@@ -2,16 +2,19 @@ use super::{dex_traits::DexTrait, pumpfun, pumpswap};
 use crate::common::trading_endpoint::TradingEndpoint;
 use serde::{Deserialize, Serialize};
 use solana_client::nonblocking::rpc_client::RpcClient;
-use solana_sdk::pubkey::Pubkey;
+use solana_sdk::{pubkey::Pubkey, signature::Keypair};
 use spl_associated_token_account::get_associated_token_address;
 use std::sync::Arc;
 
-pub struct Buy {
-    pub token_amount: u64,
-    pub sol_amount: u64,
+pub struct PoolInfo {
+    pub pool: Pubkey,
+    pub creator: Option<Pubkey>,
+    pub creator_vault: Option<Pubkey>,
+    pub token_reserves: u64,
+    pub sol_reserves: u64,
 }
 
-pub struct Sell {
+pub struct SwapInfo {
     pub token_amount: u64,
     pub sol_amount: u64,
 }
@@ -20,7 +23,7 @@ pub struct Create {
     pub name: String,
     pub symbol: String,
     pub uri: String,
-    pub mint: Pubkey,
+    pub mint_private_key: Keypair,
     pub buy_sol_amount: Option<u64>,
     pub slippage_basis_points: Option<u64>,
 }
@@ -67,4 +70,15 @@ pub enum CreateATA {
     Create,
     None,
     Idempotent,
+}
+
+pub struct BatchBuyParam {
+    pub payer: Keypair,
+    pub sol_amount: u64,
+}
+
+pub struct BatchSellParam {
+    pub payer: Keypair,
+    pub token_amount: u64,
+    pub close_mint_ata: bool,
 }
