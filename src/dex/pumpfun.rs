@@ -1,6 +1,7 @@
 use super::{
     amm_calc::{amm_buy_get_token_out, amm_sell_get_sol_out, calculate_with_slippage_buy, calculate_with_slippage_sell},
     dex_traits::DexTrait,
+    pumpfun_types::{BuyInfo, SellInfo},
     types::{Buy, Create, Sell, TokenAmountType},
 };
 use crate::{
@@ -66,40 +67,6 @@ pub struct BondingCurveAccount {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct BuyInfo {
-    pub discriminator: u64,
-    pub token_amount: u64,
-    pub sol_amount: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct SellInfo {
-    pub discriminator: u64,
-    pub token_amount: u64,
-    pub sol_amount: u64,
-}
-
-impl From<Buy> for BuyInfo {
-    fn from(buy: Buy) -> Self {
-        Self {
-            discriminator: 16927863322537952870,
-            token_amount: buy.token_amount,
-            sol_amount: buy.sol_amount,
-        }
-    }
-}
-
-impl From<Sell> for SellInfo {
-    fn from(sell: Sell) -> Self {
-        Self {
-            discriminator: 12502976635542562355,
-            token_amount: sell.token_amount,
-            sol_amount: sell.sol_amount,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct CreateInfo {
     pub discriminator: u64,
     pub name: String,
@@ -146,6 +113,8 @@ impl DexTrait for Pumpfun {
     async fn create(&self, payer: Keypair, create: Create, fee: Option<PriorityFee>, tip: Option<u64>) -> anyhow::Result<Vec<Signature>> {
         let mint = create.mint;
         let buy_sol_amount = create.buy_sol_amount;
+        let slippage_basis_points = create.slippage_basis_points.unwrap_or(0);
+
         let create_info = CreateInfo::from_create(create, payer.pubkey());
         let mut buffer = Vec::new();
         create_info.serialize(&mut buffer)?;
@@ -179,6 +148,7 @@ impl DexTrait for Pumpfun {
 
         if let Some(buy_sol_amount) = buy_sol_amount {
             let buy_token_amount = amm_buy_get_token_out(INITIAL_VIRTUAL_SOL_RESERVES, INITIAL_VIRTUAL_TOKEN_RESERVES, buy_sol_amount);
+            let buy_token_amount = calculate_with_slippage_buy(buy_token_amount, slippage_basis_points);
             let creator_vault = Self::get_creator_vault_pda(&payer.pubkey()).unwrap();
             let buy_instruction = self.build_buy_instruction(
                 &payer,
@@ -207,8 +177,7 @@ impl DexTrait for Pumpfun {
         tip: Option<u64>,
     ) -> anyhow::Result<Vec<Signature>> {
         let sol_lamports_with_slippage = calculate_with_slippage_buy(sol_lamports, slippage_basis_points);
-        let (_, pool_account) = self.get_pool(&mint).await?;
-        let blockhash = self.endpoint.rpc.get_latest_blockhash().await?;
+        let ((_, pool_account), blockhash) = tokio::try_join!(self.get_pool(&mint), self.endpoint.get_latest_blockhash())?;
         let buy_token_amount = amm_buy_get_token_out(pool_account.virtual_sol_reserves, pool_account.virtual_token_reserves, sol_lamports);
         let creator_vault = Self::get_creator_vault_pda(&pool_account.creator).ok_or(anyhow::anyhow!("Creator vault not found: {}", mint.to_string()))?;
 
@@ -264,9 +233,12 @@ impl DexTrait for Pumpfun {
         fee: Option<PriorityFee>,
         tip: Option<u64>,
     ) -> anyhow::Result<Vec<Signature>> {
-        let (_, pool_account) = self.get_pool(&mint).await?;
-        let blockhash = self.endpoint.rpc.get_latest_blockhash().await?;
-        let token_amount = token_amount.to_amount(self.endpoint.rpc.clone(), &payer.pubkey(), mint).await?;
+        let payer_pubkey = payer.pubkey();
+        let ((_, pool_account), blockhash, token_amount) = tokio::try_join!(
+            self.get_pool(&mint),
+            self.endpoint.get_latest_blockhash(),
+            token_amount.to_amount(self.endpoint.rpc.clone(), &payer_pubkey, mint)
+        )?;
         let sol_lamports = amm_sell_get_sol_out(pool_account.virtual_sol_reserves, pool_account.virtual_token_reserves, token_amount);
         let sol_lamports_with_slippage = calculate_with_slippage_sell(sol_lamports, slippage_basis_points);
         let creator_vault = Self::get_creator_vault_pda(&pool_account.creator).ok_or(anyhow::anyhow!("Creator vault not found: {}", mint.to_string()))?;
@@ -346,10 +318,9 @@ impl Pumpfun {
         self.initialized()?;
 
         let buy_info: BuyInfo = buy.into();
-        let mut buffer = Vec::new();
-        buy_info.serialize(&mut buffer)?;
-
+        let buffer = buy_info.to_buffer()?;
         let bonding_curve = Self::get_bonding_curve_pda(mint).ok_or(anyhow::anyhow!("Bonding curve not found: {}", mint.to_string()))?;
+
         Ok(Instruction::new_with_bytes(
             PUBKEY_PUMPFUN,
             &buffer,
@@ -371,11 +342,12 @@ impl Pumpfun {
     }
 
     pub fn build_sell_instruction(&self, payer: &Keypair, mint: &Pubkey, creator_vault: &Pubkey, sell: Sell) -> anyhow::Result<Instruction> {
-        let sell_info: SellInfo = sell.into();
-        let mut buffer = Vec::new();
-        sell_info.serialize(&mut buffer)?;
+        self.initialized()?;
 
+        let sell_info: SellInfo = sell.into();
+        let buffer = sell_info.to_buffer()?;
         let bonding_curve = Self::get_bonding_curve_pda(mint).ok_or(anyhow::anyhow!("Bonding curve not found: {}", mint.to_string()))?;
+
         Ok(Instruction::new_with_bytes(
             PUBKEY_PUMPFUN,
             &buffer,
