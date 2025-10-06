@@ -244,3 +244,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Disclaimer
 
 This SDK is for educational and development purposes. Always test thoroughly on devnet before using on mainnet. Trading cryptocurrencies involves risk of loss.
+
+## ## ## ## CONTACT 
+
+https://t.me/gold_boris
